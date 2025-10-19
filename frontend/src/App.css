@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+
+.leaflet-container {
+  width: 100vw;
+  height: 100vh;
+}
+
+.inputBlock {
+  display: flex;
+  justify-content: space-between;
+  position: absolute;
+  right: 2vw;
+  bottom: 2vh;
+  padding: 10px;
+  z-index: 500;
+}
+
+.addloc {
+  padding: 5px;
+}
+
+.inputBlock input {
+  border: 2px solid rgb(41, 38, 38);
+  font-size: 1.2rem;
+}
+
+.inputBlock button {
+  background-color: #282c34;
+  font-size: 1.5rem;
+  border: 2px black solid;
+}
+
+.routeBlock {
+  position: absolute;
+  left: 0.5vw;
+  bottom: 2vh;
+  z-index: 500;
+  padding: 5px;
+  font-size: 2rem;
+  border: 2px solid rgb(41, 38, 38);
+  background-color: #282c34;
+}
+
+.routeBlock input {
+  font-size: 1rem;
+}

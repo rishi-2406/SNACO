@@ -6,8 +6,13 @@ app.use(express.json());
 
 async function geocodeLocation(location) {
   try {
+    // NIT Warangal campus bounding box from provided polygon (minLon,minLat,maxLon,maxLat)
+    // Provided points (lat,lon):
+    // (17.988631, 79.526662), (17.989356, 79.533899), (17.978217, 79.534066), (17.979742, 79.527993)
+    // Bounding box derived: minLon=79.526662, minLat=17.978217, maxLon=79.534066, maxLat=17.989356
+    const viewbox = [79.526662, 17.978217, 79.534066, 17.989356].join(',');
     const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(location)}&format=json`
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(location)}&format=json&viewbox=${viewbox}&bounded=1`
     );
     const data = await response.json();
     

@@ -8,6 +8,7 @@ import { faLocationDot, faRoute } from '@fortawesome/free-solid-svg-icons';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.webpack.css';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import L from 'leaflet';
 import 'leaflet-defaulticon-compatibility';
 
 import RoutingMachine from './RoutingMachine';
@@ -38,7 +39,14 @@ function App() {
         lat: data.coordinates.latitude,
         long: data.coordinates.longitude,
       };
-      setLocationMarkers((locations) => [...locations, newLocation]);
+      // Only allow markers inside campus bounds
+      const bounds = L.latLngBounds(nitWarangalBounds);
+      const isInside = bounds.contains(L.latLng(newLocation.lat, newLocation.long));
+      if (!isInside) {
+        alert('Location is out of campus');
+        return;
+      }
+      setLocationMarkers(() => [newLocation]);
     }
   }
 
@@ -50,6 +58,8 @@ function App() {
     }
     // Hide the form
     setFormView(false);
+    // Clear any single search marker while routing between two points
+    setLocationMarkers([]);
 
     const formData = new FormData(event.target);
     const locations = formData.getAll('location');
@@ -66,9 +76,35 @@ function App() {
       alert(`Something went wrong.\n${err}`);
     } else {
       const data = await res.json();
+      // Verify waypoints are inside campus bounds
+      const bounds = L.latLngBounds(nitWarangalBounds);
+      const allInside = (data.waypoints || []).every((wp) =>
+        bounds.contains(L.latLng(wp.latitude, wp.longitude))
+      );
+      if (!allInside) {
+        alert('One or more waypoints are out of campus');
+        return;
+      }
       setWaypoints(data.waypoints);
     }
   }
+
+  // NIT Warangal campus bounds from provided coordinates (southWest, northEast)
+  const nitWarangalBounds = [
+    [17.978217, 79.526662],
+    [17.989356, 79.534066],
+  ];
+
+  const redPinIcon = L.icon({
+    iconUrl:
+      'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+    shadowUrl:
+      'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41],
+  });
 
   return (
     <div className="App">
@@ -116,10 +152,19 @@ function App() {
           />
         </div>
       </div>
-      <MapContainer center={[31.505, 70.09]} id="mapId" zoom={4}>
+      <MapContainer
+        center={[17.983787, 79.530364]}
+        id="mapId"
+        zoom={17}
+        minZoom={16.8}
+        zoomSnap={0.1}
+        zoomDelta={0.1}
+        maxBounds={nitWarangalBounds}
+        maxBoundsViscosity={1.0}
+      >
         {locationMarkers.map((loc, key) => {
           return (
-            <Marker key={key} position={[loc.lat, loc.long]}>
+            <Marker key={key} position={[loc.lat, loc.long]} icon={redPinIcon}>
               <Popup>{loc.address}</Popup>
             </Marker>
           );

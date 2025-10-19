@@ -7,7 +7,7 @@ import { faLocationDot, faRoute } from '@fortawesome/free-solid-svg-icons';
 
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.webpack.css';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet-defaulticon-compatibility';
 
@@ -108,59 +108,69 @@ function App() {
 
   return (
     <div className="App">
-      <form className="inputBlock" onSubmit={handleMarkerSubmit}>
-        <input
-          type="text"
-          id="location"
-          name="location"
-          required
-          placeholder="Enter location"
-        />
-        <button type="submit" className="addloc">
-          <FontAwesomeIcon icon={faLocationDot} style={{ color: '#1EE2C7' }} />
-        </button>
-      </form>
-      <div className="routeBlock">
-        <div className="addRoutes">
-          {showRoutingForm && (
-            <form onSubmit={handleRouteSubmit}>
-              <div className="posOne">
-                <input
-                  type="text"
-                  name="location"
-                  required
-                  placeholder="Staring Point"
-                />
-              </div>
-              <div className="posTwo">
-                <input
-                  type="text"
-                  name="location"
-                  required
-                  placeholder="End Point"
-                />
-              </div>
-              <button className="addloc">Find Path</button>
-            </form>
-          )}
-          <FontAwesomeIcon
-            icon={faRoute}
-            style={{ color: '#1EE2C7' }}
+      <nav className="fixed top-0 left-0 right-0 z-[1000] backdrop-blur bg-white/70 shadow-sm">
+        <div className="mx-auto max-w-6xl px-4 py-2 flex items-center gap-3">
+          <div className="font-semibold text-slate-800 mr-2">SNACO</div>
+          <form onSubmit={handleMarkerSubmit} className="flex-1 flex items-center gap-2">
+            <input
+              type="text"
+              id="location"
+              name="location"
+              required
+              placeholder="Enter location"
+              className="w-full rounded-md border border-slate-300 bg-white/80 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-teal-400"
+            />
+            <button type="submit" className="inline-flex items-center justify-center rounded-md bg-teal-500 px-3 py-2 text-white hover:bg-teal-600 active:bg-teal-700">
+              <FontAwesomeIcon icon={faLocationDot} />
+            </button>
+          </form>
+          <button
+            aria-label="Toggle route form"
+            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white/80 px-3 py-2 text-slate-800 hover:bg-slate-100 active:bg-slate-200"
             onClick={() => {
               setFormView((showRoutingForm) => !showRoutingForm);
             }}
-          />
+          >
+            <FontAwesomeIcon icon={faRoute} className="text-teal-500" />
+          </button>
         </div>
-      </div>
+      </nav>
+      {showRoutingForm && (
+        <div className="fixed top-14 right-4 z-[900] w-[min(90vw,420px)] rounded-lg border border-slate-200 bg-white/95 p-3 shadow-md">
+          <form onSubmit={handleRouteSubmit} className="space-y-2">
+            <input
+              type="text"
+              name="location"
+              required
+              placeholder="Starting point"
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-teal-400"
+            />
+            <input
+              type="text"
+              name="location"
+              required
+              placeholder="End point"
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-teal-400"
+            />
+            <button className="w-full rounded-md bg-teal-500 py-2 text-white hover:bg-teal-600 active:bg-teal-700">Find Path</button>
+          </form>
+        </div>
+      )}
       <MapContainer
         center={[17.983787, 79.530364]}
         id="mapId"
         zoom={17}
-        minZoom={16.8}
-        zoomSnap={0.1}
-        zoomDelta={0.1}
+        minZoom={16}
+        zoomSnap={1}
+        zoomDelta={1}
+        zoomAnimation={true}
+        zoomAnimationThreshold={4}
+        scrollWheelZoom={true}
+        wheelDebounceTime={20}
+        wheelPxPerZoomLevel={80}
         maxBounds={nitWarangalBounds}
         maxBoundsViscosity={1.0}
+        zoomControl={false}
       >
         {locationMarkers.map((loc, key) => {
           return (
@@ -170,6 +180,7 @@ function App() {
           );
         })}
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        <ZoomControl position="topright" />
         {waypoints ? <RoutingMachine waypoints={waypoints} /> : ''}
       </MapContainer>
     </div>

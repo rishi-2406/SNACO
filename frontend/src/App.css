@@ -6,6 +6,11 @@
   height: 100vh;
 }
 
+/* Offset zoom controls below the fixed navbar */
+.leaflet-top.leaflet-right {
+  top: 56px; /* navbar height */
+}
+
 .inputBlock {
   display: flex;
   justify-content: space-between;

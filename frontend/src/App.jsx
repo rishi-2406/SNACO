@@ -1,7 +1,7 @@
 // src/App.js
 
 import './App.css';
-import { useState, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faLocationDot, faRoute } from '@fortawesome/free-solid-svg-icons';
 
@@ -18,9 +18,31 @@ function App() {
   const [waypoints, setWaypoints] = useState();
   const [showRoutingForm, setFormView] = useState(false);
 
-  useEffect(() => {}, [waypoints]);
+  // Campus bounds (southWest, northEast)
+  const nitWarangalBounds = useMemo(() => (
+    [
+      [17.978217, 79.526662],
+      [17.989356, 79.534066],
+    ]
+  ), []);
 
-  async function handleMarkerSubmit(event) {
+  // LatLngBounds instance for fast containment checks
+  const campusBounds = useMemo(() => L.latLngBounds(nitWarangalBounds), [nitWarangalBounds]);
+
+  // Red map pin icon (memoized)
+  const redPinIcon = useMemo(() => L.icon({
+    iconUrl:
+      'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+    shadowUrl:
+      'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41],
+  }), []);
+
+  // Handle single-location search
+  const handleMarkerSubmit = useCallback(async (event) => {
     event.preventDefault();
     const formData = new FormData(event.target);
     const inputLocation = formData.get('location');
@@ -40,22 +62,20 @@ function App() {
         long: data.coordinates.longitude,
       };
       // Only allow markers inside campus bounds
-      const bounds = L.latLngBounds(nitWarangalBounds);
-      const isInside = bounds.contains(L.latLng(newLocation.lat, newLocation.long));
+      const isInside = campusBounds.contains(L.latLng(newLocation.lat, newLocation.long));
       if (!isInside) {
         alert('Location is out of campus');
         return;
       }
       setLocationMarkers(() => [newLocation]);
     }
-  }
+  }, [campusBounds]);
 
-  async function handleRouteSubmit(event) {
+  // Handle route between two inputs
+  const handleRouteSubmit = useCallback(async (event) => {
     event.preventDefault();
     // Reset previous waypoints
-    if (waypoints) {
-      setWaypoints();
-    }
+    setWaypoints();
     // Hide the form
     setFormView(false);
     // Clear any single search marker while routing between two points
@@ -77,9 +97,8 @@ function App() {
     } else {
       const data = await res.json();
       // Verify waypoints are inside campus bounds
-      const bounds = L.latLngBounds(nitWarangalBounds);
       const allInside = (data.waypoints || []).every((wp) =>
-        bounds.contains(L.latLng(wp.latitude, wp.longitude))
+        campusBounds.contains(L.latLng(wp.latitude, wp.longitude))
       );
       if (!allInside) {
         alert('One or more waypoints are out of campus');
@@ -87,24 +106,7 @@ function App() {
       }
       setWaypoints(data.waypoints);
     }
-  }
-
-  // NIT Warangal campus bounds from provided coordinates (southWest, northEast)
-  const nitWarangalBounds = [
-    [17.978217, 79.526662],
-    [17.989356, 79.534066],
-  ];
-
-  const redPinIcon = L.icon({
-    iconUrl:
-      'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-    shadowUrl:
-      'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    popupAnchor: [1, -34],
-    shadowSize: [41, 41],
-  });
+  }, [campusBounds]);
 
   return (
     <div className="App">

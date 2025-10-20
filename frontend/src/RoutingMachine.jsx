@@ -1,10 +1,12 @@
+// Routing control wrapper with custom red markers
 import L from 'leaflet';
 import { createControlComponent } from '@react-leaflet/core';
 import 'leaflet-routing-machine';
 import 'leaflet-routing-machine/dist/leaflet-routing-machine.css';
 
 const createRoutineMachineLayer = ({ waypoints }) => {
-  const redPinIcon = L.icon({
+  // Red map pin for route waypoints (singleton)
+  const redPinIcon = (createRoutineMachineLayer._icon ||= L.icon({
     iconUrl:
       'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
     shadowUrl:
@@ -13,7 +15,7 @@ const createRoutineMachineLayer = ({ waypoints }) => {
     iconAnchor: [12, 41],
     popupAnchor: [1, -34],
     shadowSize: [41, 41],
-  });
+  }));
 
   const instance = L.Routing.control({
     waypoints: waypoints.map(({ latitude, longitude }) =>

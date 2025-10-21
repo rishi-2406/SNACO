@@ -1,5 +1,4 @@
 // src/App.js
-
 import './App.css';
 import { useState, useMemo, useCallback } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -7,15 +6,86 @@ import { faLocationDot, faRoute } from '@fortawesome/free-solid-svg-icons';
 
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.webpack.css';
-import { MapContainer, TileLayer, Marker, Popup, ZoomControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, ZoomControl, GeoJSON } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet-defaulticon-compatibility';
 
 import RoutingMachine from './RoutingMachine';
 
+import PathFinder, { pathToGeoJSON } from 'geojson-path-finder';
+
+// Your existing GeoJSON campus paths (example minimal for demonstration)
+const existingPaths = {
+  "type": "FeatureCollection",
+  "features": [
+    // Add your usual campus paths here if you have
+    {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [79.5290, 17.9830],
+          [79.5300, 17.9840]
+        ]
+      }
+    }
+  ]
+};
+
+// New custom path to add (fixed "coordinates" typo)
+const customPath = {
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [79.53077347165163, 17.984431683214623],
+          [79.53077239513817, 17.98474760886424],
+          [79.53003307382937, 17.98474139687768],
+          [79.5296135732114, 17.98434345757161],
+          [79.52961124319233, 17.984050518523844],
+          [79.53067983544327, 17.984070488859274],
+          [79.53067271708068, 17.984419541330325],
+          [79.53077659316159, 17.984420592401975],
+          [79.5307754880971, 17.98447524812663]
+        ]
+      }
+    }, 
+    {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+        "coordinates": [
+          [
+            79.52960979665585,
+            17.984049235603905
+          ],
+          [
+            79.53211964504044,
+            17.984088246297375
+          ]
+        ],
+        "type": "LineString"
+      }
+    }
+  ]
+};
+
+// Merge both existing and custom paths
+const mergedPaths = {
+  type: "FeatureCollection",
+  features: [...existingPaths.features, ...customPath.features]
+};
+
+
 function App() {
   const [locationMarkers, setLocationMarkers] = useState([]);
   const [waypoints, setWaypoints] = useState();
+  const [routeGeoJson, setRouteGeoJson] = useState(null);
   const [showRoutingForm, setFormView] = useState(false);
 
   // Campus bounds (southWest, northEast)
@@ -40,6 +110,9 @@ function App() {
     popupAnchor: [1, -34],
     shadowSize: [41, 41],
   }), []);
+
+  // Initialize PathFinder with merged paths (memoized)
+  const pathFinder = useMemo(() => new PathFinder(mergedPaths, { tolerance: 0.1 }), []);
 
   // Handle single-location search
   const handleMarkerSubmit = useCallback(async (event) => {
@@ -68,21 +141,24 @@ function App() {
         return;
       }
       setLocationMarkers(() => [newLocation]);
+      // Clear previous route visualization
+      setRouteGeoJson(null);
+      setWaypoints(null);
     }
   }, [campusBounds]);
 
   // Handle route between two inputs
   const handleRouteSubmit = useCallback(async (event) => {
     event.preventDefault();
-    // Reset previous waypoints
-    setWaypoints();
-    // Hide the form
+    // Reset previous waypoints and route
+    setWaypoints(null);
+    setRouteGeoJson(null);
     setFormView(false);
-    // Clear any single search marker while routing between two points
     setLocationMarkers([]);
 
     const formData = new FormData(event.target);
     const locations = formData.getAll('location');
+
     const res = await fetch('/api/route', {
       method: 'POST',
       headers: {
@@ -91,22 +167,50 @@ function App() {
       },
       body: JSON.stringify({ locations }),
     });
+
     if (!res.ok) {
       const err = await res.text();
       alert(`Something went wrong.\n${err}`);
-    } else {
-      const data = await res.json();
-      // Verify waypoints are inside campus bounds
-      const allInside = (data.waypoints || []).every((wp) =>
-        campusBounds.contains(L.latLng(wp.latitude, wp.longitude))
-      );
-      if (!allInside) {
-        alert('One or more waypoints are out of campus');
-        return;
-      }
-      setWaypoints(data.waypoints);
+      return;
     }
-  }, [campusBounds]);
+
+    const data = await res.json();
+
+    // Verify waypoints are inside campus bounds
+    const allInside = (data.waypoints || []).every((wp) =>
+      campusBounds.contains(L.latLng(wp.latitude, wp.longitude))
+    );
+    if (!allInside) {
+      alert('One or more waypoints are out of campus');
+      return;
+    }
+
+    setWaypoints(data.waypoints);
+
+    // Use geojson-path-finder to find route between the two points
+    const start = {
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [parseFloat(data.waypoints[0].longitude), parseFloat(data.waypoints[0].latitude)]
+      }
+    };
+    const end = {
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [parseFloat(data.waypoints[1].longitude), parseFloat(data.waypoints[1].latitude)]
+      }
+    };
+
+    const result = pathFinder.findPath(start, end);
+    if (!result) {
+      alert("No path found for the given points");
+      return;
+    }
+
+    setRouteGeoJson(pathToGeoJSON(result));
+  }, [campusBounds, pathFinder]);
 
   return (
     <div className="App">
@@ -129,14 +233,13 @@ function App() {
           <button
             aria-label="Toggle route form"
             className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white/80 px-3 py-2 text-slate-800 hover:bg-slate-100 active:bg-slate-200"
-            onClick={() => {
-              setFormView((showRoutingForm) => !showRoutingForm);
-            }}
+            onClick={() => setFormView(showRoutingForm => !showRoutingForm)}
           >
             <FontAwesomeIcon icon={faRoute} className="text-teal-500" />
           </button>
         </div>
       </nav>
+
       {showRoutingForm && (
         <div className="fixed top-14 right-4 z-[900] w-[min(90vw,420px)] rounded-lg border border-slate-200 bg-white/95 p-3 shadow-md">
           <form onSubmit={handleRouteSubmit} className="space-y-2">
@@ -158,31 +261,30 @@ function App() {
           </form>
         </div>
       )}
+
       <MapContainer
         center={[17.983787, 79.530364]}
         id="mapId"
         zoom={17}
         minZoom={16}
-        zoomSnap={1}
-        zoomDelta={1}
-        zoomAnimation={true}
-        zoomAnimationThreshold={4}
-        scrollWheelZoom={true}
-        wheelDebounceTime={20}
-        wheelPxPerZoomLevel={80}
         maxBounds={nitWarangalBounds}
         maxBoundsViscosity={1.0}
         zoomControl={false}
+        scrollWheelZoom={true}
+        style={{ height: '100vh' }}
       >
-        {locationMarkers.map((loc, key) => {
-          return (
-            <Marker key={key} position={[loc.lat, loc.long]} icon={redPinIcon}>
-              <Popup>{loc.address}</Popup>
-            </Marker>
-          );
-        })}
+        {locationMarkers.map((loc, key) => (
+          <Marker key={key} position={[loc.lat, loc.long]} icon={redPinIcon}>
+            <Popup>{loc.address}</Popup>
+          </Marker>
+        ))}
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <ZoomControl position="topright" />
+
+        {/* Render route GeoJSON if computed */}
+        {routeGeoJson && <GeoJSON data={routeGeoJson} style={{ color: 'green', weight: 5 }} />}
+
+        {/* Existing RoutingMachine if waypoints present */}
         {waypoints ? <RoutingMachine waypoints={waypoints} /> : ''}
       </MapContainer>
     </div>

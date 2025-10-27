@@ -3,6 +3,17 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const path = require("path");
+const fs = require("fs");
+const { buildGraph } = require("./data/graph");
+const { dijkstra } = require(path.join(__dirname, "utils", "pathfinding"));
+
+
+// Load your campus paths into a graph structure at server startup
+const geojsonPath = path.join(__dirname, "data", "paths.geojson");
+const geojsonData = JSON.parse(fs.readFileSync(geojsonPath, "utf8"));
+const graph = buildGraph(geojsonData);
+
 app.use(express.json());
 
 async function geocodeLocation(location) {
@@ -47,23 +58,60 @@ app.get('/api/geocode', async (req, res) => {
   }
 });
 
-app.post('/api/route', async (req, res) => {
+app.post("/api/route", async (req, res) => {
   try {
     const locations = req.body.locations;
     
     if (!locations || locations.length !== 2) {
-      return res.status(422).json({ error: 'Expected 2 waypoints' });
+      return res.status(422).json({ error: "Expected 2 waypoints" });
     }
-    
+
+    // Step 1: Geocode both locations
     const waypoints = await Promise.all(
-      locations.map((location) => geocodeLocation(location))
+      locations.map((loc) => geocodeLocation(loc))
     );
+    console.log("Geocoded waypoints:", waypoints);
+    const start = waypoints[0];
+    const end = waypoints[1];
+
+    // Step 2: Convert to graph node keys (lon,lat)
+    const startKey = `${start.longitude},${start.latitude}`;
+    const endKey = `${end.longitude},${end.latitude}`;
+
+    console.log("Start Key:", startKey);
+    console.log("End Key:", endKey);
+
+    // Step 3: Compute shortest path
+    const result = dijkstra(graph, startKey, endKey);
+
+    if (!result.path || result.path.length === 0) {
+      return res.status(404).json({ error: "No route found in custom graph" });
+    }
+
+    console.log("Computed route:", result.path);
+
+
+    // Step 4: Convert node keys back into coordinates
+    const routeCoords = result.path.map((key) => {
+      const [lon, lat] = key.split(",").map(Number);
+      return { lat, lon };
+    });
+
+    console.log("Route coordinates:", routeCoords);
     
-    res.json({ waypoints });
+    // Step 5: Send both original geocoded waypoints + route
+    res.json({
+    waypoints: routeCoords,
+    distance: result.distance,
+    });
+
+
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);

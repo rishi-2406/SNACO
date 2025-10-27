@@ -10,6 +10,8 @@ import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility
 import { MapContainer, TileLayer, Marker, Popup, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet-defaulticon-compatibility';
+import { Polyline } from 'react-leaflet';
+
 
 import RoutingMachine from './RoutingMachine';
 
@@ -17,6 +19,8 @@ function App() {
   const [locationMarkers, setLocationMarkers] = useState([]);
   const [waypoints, setWaypoints] = useState();
   const [showRoutingForm, setFormView] = useState(false);
+  const [route, setRoute] = useState([]);
+
 
   // Campus bounds (southWest, northEast)
   const nitWarangalBounds = useMemo(() => (
@@ -44,9 +48,10 @@ function App() {
   // Handle single-location search
   const handleMarkerSubmit = useCallback(async (event) => {
     event.preventDefault();
+    //console.log("checking");
     const formData = new FormData(event.target);
     const inputLocation = formData.get('location');
-
+    
     const res = await fetch(
       '/api/geocode?' +
         new URLSearchParams({ location: inputLocation }).toString()
@@ -80,7 +85,7 @@ function App() {
     setFormView(false);
     // Clear any single search marker while routing between two points
     setLocationMarkers([]);
-
+    //console.log("checking");
     const formData = new FormData(event.target);
     const locations = formData.getAll('location');
     const res = await fetch('/api/route', {
@@ -91,20 +96,29 @@ function App() {
       },
       body: JSON.stringify({ locations }),
     });
+    //console.log("checking");
     if (!res.ok) {
       const err = await res.text();
       alert(`Something went wrong.\n${err}`);
     } else {
       const data = await res.json();
+      //console.log("Route data:", data);
+      // Draw route polyline on map
+      //const map = document.getElementById('mapId')._leaflet_map;
+     if (data.waypoints) {
+      setRoute(data.waypoints.map(wp => [wp.lat, wp.lon]));
+      setWaypoints(data.waypoints); // optional
+    }
+
       // Verify waypoints are inside campus bounds
       const allInside = (data.waypoints || []).every((wp) =>
-        campusBounds.contains(L.latLng(wp.latitude, wp.longitude))
+        campusBounds.contains(L.latLng(wp.lat, wp.lon))
       );
       if (!allInside) {
         alert('One or more waypoints are out of campus');
         return;
       }
-      setWaypoints(data.waypoints);
+      //setWaypoints(data.waypoints);
     }
   }, [campusBounds]);
 
@@ -183,7 +197,11 @@ function App() {
         })}
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <ZoomControl position="topright" />
-        {waypoints ? <RoutingMachine waypoints={waypoints} /> : ''}
+        {/* {waypoints ? <RoutingMachine waypoints={waypoints} /> : ''} */}
+        {route.length > 0 && (
+          <Polyline positions={route} color="blue" weight={4} />
+        )}
+
       </MapContainer>
     </div>
   );

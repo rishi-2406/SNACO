@@ -11,6 +11,40 @@
 /* Position zoom controls under navbar */
 .leaflet-top.leaflet-right {
   top: 56px; /* navbar height */
+  z-index: 850 !important; /* Lower than panels (z-[900]) */
+}
+
+/* Ensure zoom controls stay below panels */
+.leaflet-control-zoom {
+  z-index: 850 !important;
+}
+
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+  z-index: 850 !important;
+}
+
+/* Mobile adjustments */
+@media (max-width: 768px) {
+  .leaflet-top.leaflet-right {
+    top: 60px; /* Reduced top spacing on mobile */
+    right: 10px; /* Adjust position for mobile */
+  }
+  
+  /* Make zoom controls slightly larger on mobile for touch */
+  .leaflet-control-zoom a {
+    width: 32px;
+    height: 32px;
+    line-height: 32px;
+    font-size: 20px;
+    min-width: 32px; /* Ensure touch-friendly size */
+  }
+  
+  /* Adjust routing directions panel for mobile */
+  .leaflet-routing-alt {
+    max-width: calc(100vw - 2rem);
+    font-size: 12px;
+  }
 }
 
 .inputBlock {
@@ -51,4 +85,38 @@
 
 .routeBlock input {
   font-size: 1rem;
+}
+
+/* Routing directions panel close button */
+.leaflet-routing-alt {
+  position: relative !important;
+}
+
+.routing-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  color: #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  transition: background 0.2s;
+  padding: 0;
+}
+
+.routing-close-btn:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.routing-close-btn:active {
+  background: rgba(0, 0, 0, 0.3);
 }

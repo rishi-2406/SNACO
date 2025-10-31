@@ -16,11 +16,10 @@ import "leaflet/dist/leaflet.css";
 import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.webpack.css";
 import "leaflet-defaulticon-compatibility";
 import "leaflet-draw/dist/leaflet.draw.css";
+import "leaflet-draw";
 import L from "leaflet";
 
-import PathFinder, { pathToGeoJSON } from "geojson-path-finder"; // default import
-
-// Turf for precise snapping/splitting at mid-segment
+// Turf
 import {
   point as turfPoint,
   lineString as turfLine,
@@ -29,7 +28,7 @@ import {
   booleanPointOnLine,
 } from "@turf/turf";
 
-// Base network (keep minimal sample or your real data)
+// Minimal base network
 const baseNetwork = {
   type: "FeatureCollection",
   features: [
@@ -72,7 +71,7 @@ const bluePinIcon = makeIcon(
   "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png"
 );
 
-// Extract unique vertices from a FeatureCollection of LineStrings
+// Extract unique vertices from LineStrings
 function extractVertices(geojson) {
   const set = new Set();
   const out = [];
@@ -106,71 +105,44 @@ function haversine(a, b) {
 
 // Snap [lng,lat] to nearest vertex in list
 function snapToNearestVertex(point, vertices) {
-  let best = null;
-  let bestD = Infinity;
+  let best = null, bestD = Infinity;
   for (const v of vertices) {
     const d = haversine(point, v);
-    if (d < bestD) {
-      bestD = d;
-      best = v;
-    }
+    if (d < bestD) { bestD = d; best = v; }
   }
   return { snapped: best, distance: bestD };
 }
 
 // Insert a coordinate as a vertex by splitting the nearest LineString (≤ maxSnapMeters)
-// Returns { network, vertex } where vertex is the exact [lng,lat] inserted/used
 function injectVertexIntoNetwork(network, coord, maxSnapMeters = 25) {
   const p = turfPoint(coord);
   let best = { dist: Infinity, idx: -1, snapped: null };
-  const lines = [];
 
   (network.features || []).forEach((f, i) => {
     if (f?.geometry?.type !== "LineString") return;
-    const snapped = nearestPointOnLine(turfLine(f.geometry.coordinates), p, {
-      units: "meters",
-    });
+    const snapped = nearestPointOnLine(turfLine(f.geometry.coordinates), p, { units: "meters" });
     const dist = snapped.properties.dist || 0;
     if (dist < best.dist) best = { dist, idx: i, snapped };
   });
 
-  if (best.idx === -1 || best.dist > maxSnapMeters) {
-    // too far from the network; return as-is
-    return { network, vertex: null };
-  }
+  if (best.idx === -1 || best.dist > maxSnapMeters) return { network, vertex: null };
 
   const original = network.features[best.idx];
   const snappedCoord = best.snapped.geometry.coordinates;
 
-  // If point already sits exactly on a vertex, no split required
+  // Already a vertex?
   const isOnVertex = original.geometry.coordinates.some(
-    ([lng, lat]) =>
-      Math.abs(lng - snappedCoord[0]) < 1e-12 &&
-      Math.abs(lat - snappedCoord[1]) < 1e-12
+    ([lng, lat]) => Math.abs(lng - snappedCoord[0]) < 1e-12 && Math.abs(lat - snappedCoord[1]) < 1e-12
   );
-  if (isOnVertex) {
-    return { network, vertex: snappedCoord };
-  }
+  if (isOnVertex) return { network, vertex: snappedCoord };
 
-  // Ensure the point lies on the line for splitting
-  const onLine = booleanPointOnLine(
-    turfPoint(snappedCoord),
-    turfLine(original.geometry.coordinates),
-    { ignoreEndVertices: false }
-  );
-  if (!onLine) {
-    // Fallback: no safe split
-    return { network, vertex: null };
-  }
+  // Ensure on line and split
+  const onLine = booleanPointOnLine(turfPoint(snappedCoord), turfLine(original.geometry.coordinates), { ignoreEndVertices: false });
+  if (!onLine) return { network, vertex: null };
 
-  // Split the line at the snapped point
-  const split = lineSplit(
-    turfLine(original.geometry.coordinates),
-    turfPoint(snappedCoord)
-  );
+  const split = lineSplit(turfLine(original.geometry.coordinates), turfPoint(snappedCoord));
   const parts = split.features.filter((f) => f.geometry?.type === "LineString");
 
-  // Replace original with parts (keep properties)
   const newFeatures = network.features.slice();
   newFeatures.splice(
     best.idx,
@@ -182,31 +154,71 @@ function injectVertexIntoNetwork(network, coord, maxSnapMeters = 25) {
     }))
   );
 
-  return {
-    network: { type: "FeatureCollection", features: newFeatures },
-    vertex: snappedCoord,
-  };
+  return { network: { type: "FeatureCollection", features: newFeatures }, vertex: snappedCoord };
 }
 
-// Component to capture map clicks and set start/end by snapping to network vertices
-function ClickCapture({ mode, onSetPoint, vertices, bounds }) {
+// Nearest POI helper
+function nearestPOI(point, poiList) {
+  let best = null, bestD = Infinity;
+  for (const p of poiList || []) {
+    if (p.longitude == null || p.latitude == null) continue;
+    const coord = [p.longitude, p.latitude];
+    const d = haversine(point, coord);
+    if (d < bestD) { bestD = d; best = { coord, poi: p }; }
+  }
+  return best ? { coord: best.coord, poi: best.poi, distance: bestD } : { coord: null, poi: null, distance: Infinity };
+}
+
+// Snap to nearest point on any line segment
+function snapToLine(point, networkFc) {
+  let best = { coord: null, distance: Infinity, featureIndex: -1 };
+  const pt = turfPoint(point);
+  (networkFc.features || []).forEach((f, i) => {
+    if (!f || f.geometry?.type !== "LineString") return;
+    const snapped = nearestPointOnLine(turfLine(f.geometry.coordinates), pt, { units: "meters" });
+    const dist = snapped.properties?.dist ?? Infinity;
+    if (dist < best.distance) best = { coord: snapped.geometry.coordinates, distance: dist, featureIndex: i };
+  });
+  return best;
+}
+
+// Composite snap: vertex | poi | line-projection
+function compositeSnap(candidate, { vertices, poiList, networkFc }) {
+  const { snapped: vtx, distance: dv } = snapToNearestVertex(candidate, vertices || []);
+  const { coord: poiCoord, poi, distance: dp } = nearestPOI(candidate, poiList || []);
+  const { coord: lineCoord, distance: dl } = snapToLine(candidate, networkFc || { features: [] });
+  const POI_STRONG_PREF_METERS = 15;
+  let bestCoord = vtx, bestType = "vertex", bestDist = dv, bestPoi = null;
+  if (dp <= POI_STRONG_PREF_METERS) {
+    bestCoord = poiCoord; bestType = "poi"; bestDist = dp; bestPoi = poi;
+  } else {
+    if (dp < bestDist) { bestCoord = poiCoord; bestType = "poi"; bestDist = dp; bestPoi = poi; }
+    if (dl < bestDist) { bestCoord = lineCoord; bestType = "line"; bestDist = dl; bestPoi = null; }
+  }
+  return { coord: bestCoord, type: bestType, distance: bestDist, poi: bestPoi };
+}
+
+// Click capture
+function ClickCapture({ mode, onSetPoint, vertices, bounds, poiList, networkFc }) {
   useMapEvents({
     click(e) {
       if (!mode) return;
       const ll = e.latlng;
-      const within = L.latLngBounds(bounds).contains(ll);
-      if (!within) return;
+      if (!L.latLngBounds(bounds).contains(ll)) return;
 
       const candidate = [ll.lng, ll.lat];
-      const { snapped, distance } = snapToNearestVertex(
-        candidate,
-        vertices || []
-      );
-      if (!snapped) return;
+      const snap = compositeSnap(candidate, { vertices, poiList, networkFc });
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[ClickCapture]", { candidate, snap });
+      }
+      if (!snap?.coord) return;
+
       onSetPoint({
-        raw: [ll.lng, ll.lat],
-        snapped,
-        snapDistanceM: distance,
+        raw: candidate,
+        snapped: snap.coord,
+        snapDistanceM: Math.round(snap.distance),
+        via: snap.type,
+        poi: snap.poi || null,
         at: Date.now(),
         mode,
       });
@@ -216,146 +228,184 @@ function ClickCapture({ mode, onSetPoint, vertices, bounds }) {
 }
 
 function App() {
-  const [drawnGeoJSON, setDrawnGeoJSON] = useState({
-    type: "FeatureCollection",
-    features: [],
-  });
+  const [drawnGeoJSON, setDrawnGeoJSON] = useState({ type: "FeatureCollection", features: [] });
   const [networkGeoJSON, setNetworkGeoJSON] = useState(baseNetwork);
   const [startPt, setStartPt] = useState(null);
   const [endPt, setEndPt] = useState(null);
   const [routeGeoJson, setRouteGeoJson] = useState(null);
   const [selectMode, setSelectMode] = useState(null);
 
-  const featureGroupRef = useRef(null);
+  // POIs: DB, OSM, and drawn
+  const [poisDb, setPoisDb] = useState([]);
+  const [poisOsm, setPoisOsm] = useState([]);
+  const [poisDrawn, setPoisDrawn] = useState([]);
+  const poisAll = useMemo(() => [...(poisDb || []), ...(poisOsm || []), ...(poisDrawn || [])], [poisDb, poisOsm, poisDrawn]);
+
+  const featureGroupPathsRef = useRef(null);
+  const featureGroupPoisRef = useRef(null);
+  const selectModeRef = useRef(null);
+  useEffect(() => { selectModeRef.current = selectMode; }, [selectMode]);
+
   const campusBounds = useMemo(() => L.latLngBounds(nitWarangalBounds), []);
   const center = useMemo(() => [17.983787, 79.530364], []);
 
-  // Merge base + drawn
+  // Merge base + drawn paths
   const combinedNetwork = useMemo(() => {
-    const drawnLines = (drawnGeoJSON.features || []).filter(
-      (f) => f?.geometry?.type === "LineString"
-    );
-    return {
-      type: "FeatureCollection",
-      features: [...(baseNetwork.features || []), ...drawnLines],
-    };
+    const drawnLines = (drawnGeoJSON.features || []).filter((f) => f?.geometry?.type === "LineString");
+    return { type: "FeatureCollection", features: [...(baseNetwork.features || []), ...drawnLines] };
   }, [drawnGeoJSON]);
 
+  useEffect(() => { setNetworkGeoJSON(combinedNetwork); }, [combinedNetwork]);
+
+  // Load your POIs
   useEffect(() => {
-    setNetworkGeoJSON(combinedNetwork);
-  }, [combinedNetwork]);
-
-  // Build PathFinder with small degree tolerance (~5-6 m)
-  const pathFinderBase = useMemo(() => {
-    try {
-      return new PathFinder(networkGeoJSON, { tolerance: 0.00005 }); // ~5.5 m
-    } catch (e) {
-      console.error("PathFinder init failed", e);
-      return null;
-    }
-  }, [networkGeoJSON]);
-
-  const vertices = useMemo(
-    () => extractVertices(networkGeoJSON),
-    [networkGeoJSON]
-  );
-
-  // Sync drawn edits
-  const syncDrawn = useCallback(() => {
-    const fg = featureGroupRef.current;
-    if (!fg) return;
-    const gj = fg.toGeoJSON();
-    const lines = (gj.features || []).filter(
-      (f) => f?.geometry?.type === "LineString"
-    );
-    setDrawnGeoJSON({ type: "FeatureCollection", features: lines });
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/locations");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (mounted) setPoisDb(Array.isArray(data) ? data : []);
+      } catch {}
+    })();
+    return () => { mounted = false; };
   }, []);
 
-  const onCreated = useCallback(() => syncDrawn(), [syncDrawn]);
-  const onEdited = useCallback(() => syncDrawn(), [syncDrawn]);
-  const onDeleted = useCallback(() => syncDrawn(), [syncDrawn]);
+  // Load OSM POIs via Overpass proxy
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/osm-pois");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (mounted) setPoisOsm(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error("Failed to load OSM POIs", e);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
 
-  // Compare [lng,lat] within a small epsilon
+  const vertices = useMemo(() => extractVertices(networkGeoJSON), [networkGeoJSON]);
+
+  // Sync drawn PATHS
+  const syncDrawnPaths = useCallback(() => {
+    const fg = featureGroupPathsRef.current;
+    if (!fg) return;
+    const gj = fg.toGeoJSON();
+    const lines = (gj.features || []).filter((f) => f?.geometry?.type === "LineString");
+    setDrawnGeoJSON({ type: "FeatureCollection", features: lines });
+  }, []);
+  const onCreatedPath = useCallback(() => syncDrawnPaths(), [syncDrawnPaths]);
+  const onEditedPath = useCallback(() => syncDrawnPaths(), [syncDrawnPaths]);
+  const onDeletedPath = useCallback(() => syncDrawnPaths(), [syncDrawnPaths]);
+
+  // Sync drawn POIs (from marker group)
+  const syncDrawnPoisFromGroup = useCallback(() => {
+    const fg = featureGroupPoisRef.current;
+    if (!fg) return;
+    const gj = fg.toGeoJSON();
+    const points = (gj.features || []).filter((f) => f?.geometry?.type === "Point");
+    const list = points.map((f, i) => ({
+      id: f.properties?.id || f.properties?._id || `drawn-${i}-${Date.now()}`,
+      name: f.properties?.name || "Custom place",
+      latitude: f.geometry.coordinates[1],
+      longitude: f.geometry.coordinates[0],
+    }));
+    setPoisDrawn(list);
+  }, []);
+
+  const onCreatedPoi = useCallback((e) => {
+    if (e.layerType !== "marker") return;
+    const ll = e.layer.getLatLng();
+    const lng = ll.lng, lat = ll.lat;
+    const name = window.prompt("Place name?", "Custom place") || "Custom place";
+    const id = `drawn-${Date.now()}`;
+    // Persist properties so toGeoJSON keeps them
+    e.layer.feature = e.layer.feature || { type: "Feature", properties: {} };
+    e.layer.feature.properties.id = id;
+    e.layer.feature.properties.name = name;
+
+    // Click handler: set Start/End by clicking the drawn marker
+    e.layer.on("click", () => {
+      const modeToUse = selectModeRef.current || "start";
+      const payload = {
+        raw: [lng, lat],
+        snapped: [lng, lat],
+        snapDistanceM: 0,
+        via: "poi",
+        poi: { id, name, longitude: lng, latitude: lat },
+        at: Date.now(),
+        mode: modeToUse,
+      };
+      if (modeToUse === "start") setStartPt(payload);
+      if (modeToUse === "end") setEndPt(payload);
+      setSelectMode(null);
+    });
+
+    setPoisDrawn((prev) => [...prev, { id, name, longitude: lng, latitude: lat }]);
+  }, []);
+
+  const onEditedPoi = useCallback(() => { syncDrawnPoisFromGroup(); }, [syncDrawnPoisFromGroup]);
+  const onDeletedPoi = useCallback(() => { syncDrawnPoisFromGroup(); }, [syncDrawnPoisFromGroup]);
+
+  // Compare [lng,lat]
   function sameCoord(a, b, eps = 1e-8) {
     return a && b && Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps;
   }
 
-  // Remove consecutive duplicate coordinates
-  function dedupeConsecutive(coords) {
-    const out = [];
-    for (let i = 0; i < coords.length; i++) {
-      if (i === 0 || !sameCoord(coords[i], coords[i - 1])) out.push(coords[i]);
-    }
-    return out;
-  }
-
-  // Safe converter: builds a Feature without throwing on short paths
-  function toLineFeature(result) {
-    if (!result || !Array.isArray(result.path)) return null;
-    const coords = dedupeConsecutive(result.path);
-    if (coords.length < 2) return null; // not a valid LineString
-    return {
-      type: "Feature",
-      properties: { weight: result.weight },
-      geometry: { type: "LineString", coordinates: coords },
-    };
-  }
-
-  // Compute route: ensure start/end are vertices by injecting them if needed
+  // Compute route (delegated to backend)
   const computeRoute = useCallback(() => {
     setRouteGeoJson(null);
     if (!startPt?.snapped || !endPt?.snapped) return;
-
-    // If start and end are effectively the same vertex, skip
     if (sameCoord(startPt.snapped, endPt.snapped)) {
       alert("Start and End are the same point — no route to draw.");
       return;
     }
 
-    // Ensure endpoints are vertices by injecting (as in your current code)...
-    let working = networkGeoJSON;
-    const insStart = injectVertexIntoNetwork(working, startPt.snapped, 25);
-    working = insStart.network;
-    const startCoord = insStart.vertex || startPt.snapped;
+    const poisPayload = (poisAll || []).map((p) => ({
+      id: p._id || p.id || `${p.longitude}-${p.latitude}`,
+      name: p.name || p.address || p._id || p.id || "Place",
+      coordinates: [p.longitude, p.latitude],
+    }));
 
-    const insEnd = injectVertexIntoNetwork(working, endPt.snapped, 25);
-    working = insEnd.network;
-    const endCoord = insEnd.vertex || endPt.snapped;
-
-    let pf;
-    try {
-      pf = new PathFinder(working, { tolerance: 0.00005 });
-    } catch {
-      alert("Routing network build failed");
-      return;
-    }
-
-    const start = {
-      type: "Feature",
-      geometry: { type: "Point", coordinates: startCoord },
+    const prepareEndpoint = (pt) => {
+      if (!pt) return null;
+      if (pt.poi && (pt.poi._id || pt.poi.id)) return { placeId: pt.poi._id || pt.poi.id };
+      // Ensure we send coordinates as an array
+      const coords = pt.snapped || pt.raw;
+      if (Array.isArray(coords) && coords.length === 2) return coords;
+      return null;
     };
-    const end = {
-      type: "Feature",
-      geometry: { type: "Point", coordinates: endCoord },
-    };
-    const result = pf.findPath(start, end);
 
-    // Guard before pathToGeoJSON to avoid the LineString error
-    const feature = toLineFeature(result);
-    if (!feature) {
-      alert(
-        "Route is too short or invalid (fewer than 2 points). Adjust points or add connecting lines."
-      );
-      return;
-    }
+    (async () => {
+      try {
+        const body = {
+          start: prepareEndpoint(startPt),
+          end: prepareEndpoint(endPt),
+          pois: poisPayload,
+          network: networkGeoJSON,
+        };
+        const res = await fetch("/api/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `Server returned ${res.status}`);
+        }
+        const data = await res.json();
+        if (!data?.route) throw new Error("No route returned");
+        setRouteGeoJson(data.route);
+      } catch (e) {
+        console.error("Routing failed", e);
+        alert("Routing failed: " + e.message);
+      }
+    })();
+  }, [networkGeoJSON, startPt, endPt, poisAll]);
 
-    // If you prefer, you can still use pathToGeoJSON when safe:
-    // const gj = pathToGeoJSON(result); // only if feature would be non-null
-
-    setRouteGeoJson(feature);
-  }, [networkGeoJSON, startPt, endPt]);
-
-  // Clear the rendered route and selection state
   const clearRoute = useCallback(() => {
     setRouteGeoJson(null);
     setStartPt(null);
@@ -363,12 +413,9 @@ function App() {
     setSelectMode(null);
   }, []);
 
-  // Export currently drawn polylines as GeoJSON
   const exportDrawn = useCallback(() => {
     const data = drawnGeoJSON;
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: "application/geo+json",
-    });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/geo+json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -384,44 +431,27 @@ function App() {
           <div className="font-semibold text-slate-800">SNACO</div>
           <div className="flex items-center gap-2">
             <button
-              className={`rounded-md px-3 py-1.5 text-sm ${
-                selectMode === "start"
-                  ? "bg-green-600 text-white"
-                  : "bg-white border border-slate-300 text-slate-800"
-              }`}
-              onClick={() =>
-                setSelectMode((m) => (m === "start" ? null : "start"))
-              }
+              className={`rounded-md px-3 py-1.5 text-sm ${selectMode === "start" ? "bg-green-600 text-white" : "bg-white border border-slate-300 text-slate-800"}`}
+              onClick={() => setSelectMode((m) => (m === "start" ? null : "start"))}
+              title="Click the map or a POI to set Start"
             >
               Set Start
             </button>
             <button
-              className={`rounded-md px-3 py-1.5 text-sm ${
-                selectMode === "end"
-                  ? "bg-red-600 text-white"
-                  : "bg-white border border-slate-300 text-slate-800"
-              }`}
+              className={`rounded-md px-3 py-1.5 text-sm ${selectMode === "end" ? "bg-red-600 text-white" : "bg-white border border-slate-300 text-slate-800"}`}
               onClick={() => setSelectMode((m) => (m === "end" ? null : "end"))}
+              title="Click the map or a POI to set End"
             >
               Set End
             </button>
-            <button
-              className="rounded-md px-3 py-1.5 text-sm bg-teal-500 text-white hover:bg-teal-600"
-              onClick={computeRoute}
-            >
+            <button className="rounded-md px-3 py-1.5 text-sm bg-teal-500 text-white hover:bg-teal-600" onClick={computeRoute} title="Compute route on backend">
               Compute Route
             </button>
-            <button
-              className="rounded-md px-3 py-1.5 text-sm bg-white border border-slate-300 text-slate-800"
-              onClick={clearRoute}
-            >
+            <button className="rounded-md px-3 py-1.5 text-sm bg-white border border-slate-300 text-slate-800" onClick={clearRoute}>
               Clear Route
             </button>
-            <button
-              className="rounded-md px-3 py-1.5 text-sm bg-white border border-slate-300 text-slate-800"
-              onClick={exportDrawn}
-            >
-              Export GeoJSON
+            <button className="rounded-md px-3 py-1.5 text-sm bg-white border border-slate-300 text-slate-800" onClick={exportDrawn}>
+              Export Paths GeoJSON
             </button>
           </div>
         </div>
@@ -429,27 +459,11 @@ function App() {
 
       <div className="fixed top-14 right-4 z-[900] w-[min(90vw,360px)] rounded-lg border border-slate-200 bg-white/95 p-3 shadow-md space-y-2">
         <div className="text-xs text-slate-600">
-          Draw polylines to add campus paths, then set Start/End by clicking;
-          routing injects those points into the network if they fall
-          mid‑segment.
+          Draw paths and POIs; clicks snap to vertices, named places, or the nearest line.
         </div>
         <div className="text-xs">
-          <div>
-            Start:{" "}
-            {startPt?.snapped
-              ? `${startPt.snapped[1].toFixed(6)}, ${startPt.snapped[0].toFixed(
-                  6
-                )} (snap ${Math.round(startPt.snapDistanceM)} m)`
-              : "—"}
-          </div>
-          <div>
-            End:{" "}
-            {endPt?.snapped
-              ? `${endPt.snapped[1].toFixed(6)}, ${endPt.snapped[0].toFixed(
-                  6
-                )} (snap ${Math.round(endPt.snapDistanceM)} m)`
-              : "—"}
-          </div>
+          <div>Start: {startPt?.snapped ? `${startPt.snapped[1].toFixed(6)}, ${startPt.snapped[0].toFixed(6)} (${startPt.via})` : "—"}</div>
+          <div>End: {endPt?.snapped ? `${endPt.snapped[1].toFixed(6)}, ${endPt.snapped[0].toFixed(6)} (${endPt.via})` : "—"}</div>
         </div>
       </div>
 
@@ -467,12 +481,13 @@ function App() {
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <ZoomControl position="topright" />
 
-        <FeatureGroup ref={featureGroupRef}>
+        {/* Paths drawing/editing */}
+        <FeatureGroup ref={featureGroupPathsRef}>
           <EditControl
             position="topleft"
-            onCreated={onCreated}
-            onEdited={onEdited}
-            onDeleted={onDeleted}
+            onCreated={onCreatedPath}
+            onEdited={onEditedPath}
+            onDeleted={onDeletedPath}
             draw={{
               polyline: { shapeOptions: { color: "#2563eb", weight: 4 } },
               polygon: false,
@@ -488,50 +503,35 @@ function App() {
           />
         </FeatureGroup>
 
-        <GeoJSON
-          data={baseNetwork}
-          style={{ color: "#64748b", weight: 2, dashArray: "4 4" }}
-        />
+        {/* POI editing removed - POIs used for snapping but not displayed */}
 
-        {routeGeoJson && (
-          <GeoJSON data={routeGeoJson} style={{ color: "green", weight: 5 }} />
-        )}
+        {/* Visualize base network */}
+        <GeoJSON data={baseNetwork} style={{ color: "#64748b", weight: 2, dashArray: "4 4" }} />
 
+        {/* Backend route */}
+        {routeGeoJson && <GeoJSON data={routeGeoJson} style={{ color: "green", weight: 5 }} />}
+
+        {/* Start/End markers */}
         {startPt?.snapped && (
-          <Marker
-            position={[startPt.snapped[1], startPt.snapped[0]]}
-            icon={greenPinIcon}
-          >
+          <Marker position={[startPt.snapped[1], startPt.snapped[0]]} icon={greenPinIcon}>
             <Popup>Start</Popup>
           </Marker>
         )}
         {endPt?.snapped && (
-          <Marker
-            position={[endPt.snapped[1], endPt.snapped[0]]}
-            icon={redPinIcon}
-          >
+          <Marker position={[endPt.snapped[1], endPt.snapped[0]]} icon={redPinIcon}>
             <Popup>End</Popup>
           </Marker>
         )}
 
-        {startPt?.raw && (
-          <Marker
-            position={[startPt.raw[1], startPt.raw[0]]}
-            icon={bluePinIcon}
-          >
-            <Popup>Clicked (pre-snap)</Popup>
-          </Marker>
-        )}
-        {endPt?.raw && (
-          <Marker position={[endPt.raw[1], endPt.raw[0]]} icon={bluePinIcon}>
-            <Popup>Clicked (pre-snap)</Popup>
-          </Marker>
-        )}
+        {/* POIs not displayed but available for snapping via ClickCapture */}
 
+        {/* Click handler with composite snap */}
         <ClickCapture
           mode={selectMode}
           vertices={vertices}
           bounds={nitWarangalBounds}
+          poiList={poisAll}
+          networkFc={networkGeoJSON}
           onSetPoint={(p) => {
             if (p.mode === "start") setStartPt(p);
             if (p.mode === "end") setEndPt(p);

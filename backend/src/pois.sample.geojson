@@ -1,0 +1,15 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "id": "nitw-fountain", "name": "NITW Fountain" },
+      "geometry": { "type": "Point", "coordinates": [79.530364, 17.983787] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "main-gate", "name": "Main Gate" },
+      "geometry": { "type": "Point", "coordinates": [79.529, 17.9832] }
+    }
+  ]
+}
